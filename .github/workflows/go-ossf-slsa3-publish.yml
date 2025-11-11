@@ -68,14 +68,23 @@ jobs:
 
           mkdir -p dist
 
-          echo "=== Listing SRC_DIR ==="
+          echo "SRC_DIR=$SRC_DIR"
           ls -la "$SRC_DIR"
 
-          # Build explicitly for AMD64
+          # Build explicitly for AMD64 from ./cmd, output to ./dist
           GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
-            go build -C "$SRC_DIR" -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/dist/proton-ge-manager" .
+            go build -C "$SRC_DIR" -trimpath -ldflags "-s -w" \
+              -o "$GITHUB_WORKSPACE/dist/proton-ge-manager" .
+
+          echo "=== dist contents ==="
+          ls -la dist
+          file dist/proton-ge-manager || true
+
+          # Hard fail if binary not there
+          test -f dist/proton-ge-manager
 
           chmod +x dist/proton-ge-manager
+
 
       - name: Assemble AppDir
         env:
