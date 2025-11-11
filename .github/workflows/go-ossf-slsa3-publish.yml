@@ -228,6 +228,10 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Restore AppImage permissions
+        run: |
+          find dist -type f -name "*.AppImage" -exec chmod +x {} \;
+
       - name: Ensure AppImage exists
         run: |
           echo "== dist tree =="
