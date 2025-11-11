@@ -25,7 +25,7 @@ env:
   APP_NAME: Proton-GE Manager
   ICON_PATH: ./internal/assets/icon.png
   SRC_DIR:  ./cmd
-  GO_VERSION: "1.22.12"
+  GO_VERSION: "1.25.4"
 
 jobs:
   build-appimage:
