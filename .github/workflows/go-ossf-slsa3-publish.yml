@@ -1,10 +1,13 @@
 name: Release (Proton-GE Manager — Linux AppImage)
 
 on:
+  push:
+    tags:
+      - 'v*'     # build & publish when you push a tag
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag name to publish (e.g., v1.0.0). Required when running manually if not on a tag."
+        description: "Tag name to publish (e.g., v1.0.0) if running manually"
         required: false
         type: string
       prerelease:
@@ -18,7 +21,7 @@ permissions:
   id-token: write
 
 env:
-  APP_ID:   com.sirrandall.protonge.manager
+  APP_ID:   com.siirrandall.protonge.manager
   APP_NAME: Proton-GE Manager
   ICON_PATH: ./internal/assets/icon.png
   SRC_DIR:  ./cmd
@@ -201,7 +204,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist
-          merge-multiple: true
+          merge-multiple: true   # flatten into dist/
+
+      - name: Debug files before upload
+        run: |
+          echo "== dist tree =="
+          find dist -maxdepth 3 -type f -printf "%p\n" | sort
 
       - name: Upload AppImage to Release
         uses: softprops/action-gh-release@v2
@@ -211,4 +219,4 @@ jobs:
           make_latest: true
           prerelease: ${{ inputs.prerelease == true }}
           files: |
-            dist/proton-ge-manager-linux-x86_64.AppImage
+            dist/**/*.AppImage     # <— glob ensures we attach the AppImage wherever it landed
