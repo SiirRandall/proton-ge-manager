@@ -131,14 +131,42 @@ jobs:
           APP_ID:   ${{ env.APP_ID }}
         run: |
           set -euo pipefail
+          echo "Downloading appimagetool (with fallbacks)…"
 
-          # Download x86_64 appimagetool
-          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
-            -o appimagetool \
+          urls=(
+            "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+            "https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage"
+            # latest is flaky; keep it last just in case it appears again
             "https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage"
+          )
 
+          rm -f appimagetool || true
+          ok=0
+          for u in "${urls[@]}"; do
+            echo "Trying: $u"
+            if curl -fL --retry 5 --retry-delay 2 --retry-all-errors -o appimagetool "$u"; then
+              ok=1; break
+            fi
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "Failed to download appimagetool from all sources"
+            exit 1
+          fi
           chmod +x appimagetool
-          ./appimagetool --version || true
+
+          # Some runners have FUSE quirks; fall back to extracted AppRun if needed
+          APPIMG="./appimagetool"
+          if ! "$APPIMG" --version >/dev/null 2>&1; then
+            echo "Direct execution failed, extracting AppImage…"
+            ./appimagetool --appimage-extract >/dev/null 2>&1 || true
+            if [ -x "./squashfs-root/AppRun" ]; then
+              APPIMG="./squashfs-root/AppRun"
+              "$APPIMG" --version || true
+            else
+              echo "Extraction failed; cannot find squashfs-root/AppRun"
+              exit 1
+            fi
+          fi
 
           # Validate AppDir
           test -x AppDir/AppRun
@@ -147,18 +175,13 @@ jobs:
 
           export VERSION="${GITHUB_REF_NAME:-$(date +%Y%m%d)}"
 
-          # Build AppImage
-          ./appimagetool -v --no-appstream AppDir "${APP_NAME}.AppImage" 2>&1 | tee appimagetool.log
+          # Build AppImage (verbose, skip appstream)
+          "$APPIMG" -v --no-appstream AppDir "${APP_NAME}.AppImage" 2>&1 | tee appimagetool.log
 
           mkdir -p dist
           chmod +x "${APP_NAME}.AppImage"
           mv "${APP_NAME}.AppImage" dist/proton-ge-manager-linux-x86_64.AppImage
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: proton-ge-manager-appimage
-          path: dist/proton-ge-manager-linux-x86_64.AppImage
 
   publish:
     needs: [build-appimage]
