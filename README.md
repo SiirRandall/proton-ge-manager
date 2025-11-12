@@ -23,7 +23,7 @@ It provides a clean graphical interface built with Fyne and removes the need for
 
 ![Proton-GE Manager Screenshot](assets/screenshot.png)
 
----
+--- 
 
 ## Installation
 
