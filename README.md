@@ -21,8 +21,6 @@ It provides a clean graphical interface built with Fyne and removes the need for
 
 ## Screenshot
 
-(Replace this placeholder with your actual screenshot filename)
-
 ![Proton-GE Manager Screenshot](assets/screenshot.png)
 
 ---
