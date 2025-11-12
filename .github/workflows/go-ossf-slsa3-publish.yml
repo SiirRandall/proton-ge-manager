@@ -1,10 +1,13 @@
 name: Release (Proton-GE Manager — Linux AppImage)
 
 on:
+  push:
+    tags:
+      - 'v*'     # build & publish when you push a tag
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag name to publish (e.g., v0.4.0). Required when running manually if not on a tag."
+        description: "Tag name to publish (e.g., v1.0.0) if running manually"
         required: false
         type: string
       prerelease:
@@ -12,19 +15,17 @@ on:
         required: false
         type: boolean
         default: false
-  release:
-    types: [created]
 
 permissions:
   contents: write
   id-token: write
 
 env:
-  APP_ID:   com.siirrandall.protonge.manager
+  APP_ID:   com.sirrandall.protonge.manager
   APP_NAME: Proton-GE Manager
   ICON_PATH: ./internal/assets/icon.png
-  SRC_DIR: ./cmd/
-  GO_VERSION: "1.22.12"
+  SRC_DIR:  ./cmd
+  GO_VERSION: "1.25.4"
 
 jobs:
   build-appimage:
@@ -46,16 +47,43 @@ jobs:
             libxrandr-dev libxxf86vm-dev libxi-dev libxcursor-dev libxinerama-dev \
             libfuse2 wget curl desktop-file-utils squashfs-tools
 
+      - name: Force local toolchain & isolate caches
+        run: |
+          # Force Go to use the installed toolchain only (no golang.org/toolchain download)
+          go env -w GOTOOLCHAIN=local
+
+          # Isolate caches into the workspace to avoid tar collisions
+          echo "GOMODCACHE=$GITHUB_WORKSPACE/.gomodcache" >> $GITHUB_ENV
+          echo "GOCACHE=$GITHUB_WORKSPACE/.gocache"       >> $GITHUB_ENV
+
+          # Ensure clean dirs
+          rm -rf "$GITHUB_WORKSPACE/.gomodcache" "$GITHUB_WORKSPACE/.gocache"
+          mkdir -p "$GITHUB_WORKSPACE/.gomodcache" "$GITHUB_WORKSPACE/.gocache"
+
       - name: Build linux amd64 binary
         env:
           CGO_ENABLED: "1"
         run: |
           set -euo pipefail
+
           mkdir -p dist
-          cd "$SRC_DIR"
-          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o ../../dist/proton-ge-managers
-          cd ../../dist
-          chmod +x proton-ge-manager
+
+          echo "SRC_DIR=$SRC_DIR"
+          ls -la "$SRC_DIR"
+
+          # Build explicitly for AMD64 from ./cmd, output to ./dist
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
+            go build -C "$SRC_DIR" -trimpath -ldflags "-s -w" \
+              -o "$GITHUB_WORKSPACE/dist/proton-ge-manager" .
+
+          echo "=== dist contents ==="
+          ls -la dist
+          file dist/proton-ge-manager || true
+
+          # Hard fail if binary not there
+          test -f dist/proton-ge-manager
+
+          chmod +x dist/proton-ge-manager
 
       - name: Assemble AppDir
         env:
@@ -64,6 +92,7 @@ jobs:
           ICON_PATH: ${{ env.ICON_PATH }}
         run: |
           set -euo pipefail
+
           APPDIR="AppDir"
           BIN_NAME="proton-ge-manager"
           DESKTOP_NAME="${APP_ID}.desktop"
@@ -78,7 +107,7 @@ jobs:
           cp dist/${BIN_NAME} "${APPDIR}/usr/bin/${BIN_NAME}"
           chmod +x "${APPDIR}/usr/bin/${BIN_NAME}"
 
-          # .desktop
+          # Desktop file
           cat > "${APPDIR}/${DESKTOP_NAME}" <<EOF
           [Desktop Entry]
           Type=Application
@@ -91,16 +120,17 @@ jobs:
           EOF
 
           # Icon
+          echo "ICON_PATH=$ICON_PATH"
           if [ -f "${ICON_PATH}" ]; then
             cp "${ICON_PATH}" "${APPDIR}/${ICON_NAME}"
             cp "${ICON_PATH}" "${APPDIR}/usr/share/icons/hicolor/256x256/apps/${ICON_NAME}"
           else
-            echo "WARNING: Icon not found at ${ICON_PATH}"
+            echo "WARNING: Icon missing: ${ICON_PATH}"
             : > "${APPDIR}/${ICON_NAME}"
           fi
           ln -sf "${ICON_NAME}" "${APPDIR}/.DirIcon" || true
 
-          # Copy desktop file final locations
+          # Copy desktop file
           cp "${APPDIR}/${DESKTOP_NAME}" "${APPDIR}/usr/share/applications/${DESKTOP_NAME}"
 
           # AppRun launcher
@@ -112,7 +142,6 @@ jobs:
           EOF
           chmod +x "${APPDIR}/AppRun"
 
-          echo "== desktop-file-validate =="
           desktop-file-validate -v "${APPDIR}/${DESKTOP_NAME}" || true
 
       - name: Build AppImage
@@ -121,54 +150,76 @@ jobs:
           APP_ID:   ${{ env.APP_ID }}
         run: |
           set -euo pipefail
+          echo "Downloading appimagetool (with fallbacks)…"
 
-          # Download latest x86_64 appimagetool
-          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
-            -o appimagetool \
+          urls=(
+            "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+            "https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage"
             "https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage"
+          )
 
+          rm -f appimagetool || true
+          ok=0
+          for u in "${urls[@]}"; do
+            echo "Trying: $u"
+            if curl -fL --retry 5 --retry-delay 2 --retry-all-errors -o appimagetool "$u"; then
+              ok=1; break
+            fi
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "Failed to download appimagetool from all sources"
+            exit 1
+          fi
           chmod +x appimagetool
-          ./appimagetool --version || true
 
-          # Sanity checks
+          # Some runners have FUSE quirks; fall back to extracted AppRun if needed
+          APPIMG="./appimagetool"
+          if ! "$APPIMG" --version >/dev/null 2>&1; then
+            echo "Direct execution failed, extracting AppImage…"
+            ./appimagetool --appimage-extract >/dev/null 2>&1 || true
+            if [ -x "./squashfs-root/AppRun" ]; then
+              APPIMG="./squashfs-root/AppRun"
+              "$APPIMG" --version || true
+            else
+              echo "Extraction failed; cannot find squashfs-root/AppRun"
+              exit 1
+            fi
+          fi
+
+          # Validate AppDir
           test -x AppDir/AppRun
           test -f "AppDir/${APP_ID}.desktop"
           test -f "AppDir/${APP_ID}.png"
 
-          # Build metadata
           export VERSION="${GITHUB_REF_NAME:-$(date +%Y%m%d)}"
 
-          # Build AppImage
-          ./appimagetool -v --no-appstream AppDir "${APP_NAME}.AppImage" 2>&1 | tee appimagetool.log || {
-            echo "appimagetool failed -> dumping logs:"
-            find AppDir -maxdepth 5 -type f -printf "%M %p\n" | sort
-            tail -n 200 appimagetool.log || true
-            exit 1
-          }
+          # Build AppImage (verbose, skip appstream)
+          "$APPIMG" -v --no-appstream AppDir "${APP_NAME}.AppImage" 2>&1 | tee appimagetool.log
 
           mkdir -p dist
           chmod +x "${APP_NAME}.AppImage"
           mv "${APP_NAME}.AppImage" dist/proton-ge-manager-linux-x86_64.AppImage
 
+      # ✅ Upload artifact so publish job can fetch it
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:
-          name: appimage-amd64
+          name: proton-ge-manager-appimage
           path: dist/proton-ge-manager-linux-x86_64.AppImage
+          if-no-files-found: error
 
   publish:
     needs: [build-appimage]
     runs-on: ubuntu-22.04
     env:
       TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fail if tag missing on manual run
+      - name: Fail if no tag was provided
         if: ${{ github.ref_type != 'tag' && (inputs.tag == '' || inputs.tag == null) }}
         run: |
-          echo "This workflow requires a tag. Provide one via 'Run workflow' → tag (e.g., v1.0.0), or push a tag and trigger this workflow."
+          echo "Missing tag. Supply a tag (e.g., v1.0.0) when triggering manually."
           exit 1
 
       - name: Download artifacts
@@ -177,7 +228,20 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Upload final AppImage to Release
+      - name: Restore AppImage permissions
+        run: |
+          find dist -type f -name "*.AppImage" -exec chmod +x {} \;
+
+      - name: Ensure AppImage exists
+        run: |
+          echo "== dist tree =="
+          find dist -maxdepth 3 -type f -printf "%p\n" | sort || true
+          test -n "$(find dist -name '*.AppImage' -type f -print -quit)" || {
+            echo "No AppImage found in dist/"
+            exit 1
+          }
+
+      - name: Upload AppImage to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
@@ -185,4 +249,4 @@ jobs:
           make_latest: true
           prerelease: ${{ inputs.prerelease == true }}
           files: |
-            dist/proton-ge-manager-linux-x86_64.AppImage
+            dist/**/*.AppImage
