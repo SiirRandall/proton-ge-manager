@@ -3,6 +3,8 @@
 **Proton-GE Manager** is a lightweight Linux application for easily installing, updating, and managing Proton-GE builds for Steam.  
 It provides a clean graphical interface built with Fyne and removes the need for manual downloads or file extraction.
 
+*A special thanks to [GloriousEggroll](https://github.com/GloriousEggroll) for their incredible work on [Proton-GE](https://github.com/GloriousEggroll/proton-ge-custom). Without their dedication and ongoing effort, this project would not exist.*
+
 ---
 
 ## Features
